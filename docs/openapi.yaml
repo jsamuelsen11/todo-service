@@ -10,6 +10,10 @@ components:
           format: uri
           readOnly: true
           type: string
+        category:
+          examples:
+            - personal
+          type: string
         description:
           examples:
             - Milk, eggs, bread
@@ -102,6 +106,10 @@ components:
           format: uri
           readOnly: true
           type: string
+        category:
+          examples:
+            - personal
+          type: string
         created_at:
           examples:
             - "2026-02-12T15:04:05Z"
@@ -141,6 +149,7 @@ components:
         - title
         - description
         - status
+        - category
         - progress_percent
         - created_at
         - updated_at
@@ -180,6 +189,10 @@ components:
           format: uri
           readOnly: true
           type: string
+        category:
+          examples:
+            - work
+          type: string
         description:
           examples:
             - Milk, eggs, bread, butter
@@ -208,7 +221,7 @@ openapi: 3.1.0
 paths:
   /api/v1/todos:
     get:
-      description: Retrieve all TODO items, optionally filtered by status.
+      description: Retrieve all TODO items, optionally filtered by status and/or category.
       operationId: list-todos
       parameters:
         - description: Filter by status
@@ -221,6 +234,17 @@ paths:
               - pending
               - in_progress
               - done
+            type: string
+        - description: Filter by category
+          explode: false
+          in: query
+          name: category
+          schema:
+            description: Filter by category
+            enum:
+              - personal
+              - work
+              - other
             type: string
       responses:
         "200":
