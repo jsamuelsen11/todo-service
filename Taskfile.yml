@@ -1,0 +1,91 @@
+version: '3'
+
+vars:
+  BINARY: todo-service
+  DB_PATH: ./data/todos.db
+  LOG_DIR: ./logs
+  LOG_FILE: ./logs/app.log
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  setup:
+    desc: Install all dependencies and tools
+    cmds:
+      - go mod tidy
+      - mkdir -p data logs docs
+
+  build:
+    desc: Build the service binary
+    cmds:
+      - go build -o {{.BINARY}} .
+
+  run:
+    desc: Build and run the service
+    deps: [build]
+    cmds:
+      - ./{{.BINARY}}
+
+  "run:dev":
+    desc: Run with go run (faster iteration)
+    cmds:
+      - go run .
+
+  openapi:
+    desc: Export the OpenAPI 3.1 spec (YAML + JSON) from the running server
+    cmds:
+      - mkdir -p docs
+      - curl -s http://localhost:8080/openapi.yaml > docs/openapi.yaml
+      - curl -s http://localhost:8080/openapi.json | jq . > docs/openapi.json
+      - echo "Saved to docs/openapi.yaml and docs/openapi.json"
+
+  clean:
+    desc: Remove build artifacts, database, and logs
+    cmds:
+      - rm -f {{.BINARY}}
+      - rm -f {{.DB_PATH}} {{.DB_PATH}}-wal {{.DB_PATH}}-shm
+      - rm -f {{.LOG_DIR}}/*.log*
+
+  # ── Log Query Tasks ──────────────────────────────────────────
+
+  "logs:all":
+    desc: Show all log entries (pretty-printed)
+    cmds:
+      - jq '.' {{.LOG_FILE}}
+
+  "logs:errors":
+    desc: Show only ERROR-level log entries
+    cmds:
+      - jq 'select(.level == "ERROR")' {{.LOG_FILE}}
+
+  "logs:by-path":
+    desc: "Filter logs by request path (usage: task logs:by-path -- /api/v1/todos)"
+    cmds:
+      - jq --arg path "{{.CLI_ARGS}}" 'select(.path == $path)' {{.LOG_FILE}}
+
+  "logs:by-status":
+    desc: "Filter logs by HTTP status code (usage: task logs:by-status -- 500)"
+    cmds:
+      - jq --argjson status {{.CLI_ARGS}} 'select(.status == $status)' {{.LOG_FILE}}
+
+  "logs:slow":
+    desc: Show requests slower than 100ms
+    cmds:
+      - jq 'select(.duration_ms > 100)' {{.LOG_FILE}}
+
+  "logs:recent":
+    desc: Show the last 20 log entries (pretty-printed)
+    cmds:
+      - tail -n 20 {{.LOG_FILE}} | jq '.'
+
+  "logs:summary":
+    desc: Show request count grouped by status code
+    cmds:
+      - >-
+        jq -s '[.[] | select(.status != null)]
+        | group_by(.status)
+        | map({status: .[0].status, count: length})
+        | sort_by(.status)' {{.LOG_FILE}}
