@@ -73,7 +73,51 @@ func (r *Repository) Migrate() error {
 	if _, err := r.db.Exec(schema); err != nil {
 		return fmt.Errorf("execute schema: %w", err)
 	}
+
+	if err := r.addCategoryColumn(); err != nil {
+		return fmt.Errorf("add category column: %w", err)
+	}
+
 	r.logger.Info("database migration complete")
+	return nil
+}
+
+// addCategoryColumn adds the category column if it doesn't already exist.
+func (r *Repository) addCategoryColumn() error {
+	rows, err := r.db.Query("PRAGMA table_info(todos)")
+	if err != nil {
+		return fmt.Errorf("query table info: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull int
+		var dfltValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+			return fmt.Errorf("scan table info: %w", err)
+		}
+		if name == "category" {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate table info: %w", err)
+	}
+
+	migration := `
+	ALTER TABLE todos ADD COLUMN category TEXT NOT NULL DEFAULT 'personal' CHECK(category IN ('personal', 'work', 'other'));
+	`
+	if _, err := r.db.Exec(migration); err != nil {
+		return fmt.Errorf("execute category migration: %w", err)
+	}
+	if _, err := r.db.Exec(`CREATE INDEX IF NOT EXISTS idx_todos_category ON todos(category)`); err != nil {
+		return fmt.Errorf("create category index: %w", err)
+	}
+
+	r.logger.Info("added category column to todos table")
 	return nil
 }
 
@@ -83,14 +127,18 @@ func (r *Repository) CreateTodo(req model.CreateTodoRequest) (model.Todo, error)
 	if req.Status != "" {
 		status = req.Status
 	}
+	category := model.CategoryPersonal
+	if req.Category != "" {
+		category = req.Category
+	}
 	progress := 0
 	if req.ProgressPercent != nil {
 		progress = *req.ProgressPercent
 	}
 
 	result, err := r.db.Exec(
-		`INSERT INTO todos (title, description, status, progress_percent) VALUES (?, ?, ?, ?)`,
-		req.Title, req.Description, string(status), progress,
+		`INSERT INTO todos (title, description, status, category, progress_percent) VALUES (?, ?, ?, ?, ?)`,
+		req.Title, req.Description, string(status), string(category), progress,
 	)
 	if err != nil {
 		return model.Todo{}, fmt.Errorf("insert todo: %w", err)
@@ -107,7 +155,7 @@ func (r *Repository) CreateTodo(req model.CreateTodoRequest) (model.Todo, error)
 // GetTodo retrieves a single TODO by ID.
 func (r *Repository) GetTodo(id int64) (model.Todo, error) {
 	row := r.db.QueryRow(
-		`SELECT id, title, description, status, progress_percent,
+		`SELECT id, title, description, status, category, progress_percent,
 			strftime('%Y-%m-%dT%H:%M:%SZ', created_at),
 			strftime('%Y-%m-%dT%H:%M:%SZ', updated_at)
 		FROM todos WHERE id = ?`,
@@ -116,17 +164,26 @@ func (r *Repository) GetTodo(id int64) (model.Todo, error) {
 	return scanTodo(row)
 }
 
-// ListTodos retrieves all TODOs, optionally filtered by status.
-func (r *Repository) ListTodos(status *model.Status) ([]model.Todo, error) {
-	query := `SELECT id, title, description, status, progress_percent,
+// ListTodos retrieves all TODOs, optionally filtered by status and/or category.
+func (r *Repository) ListTodos(status *model.Status, category *model.Category) ([]model.Todo, error) {
+	query := `SELECT id, title, description, status, category, progress_percent,
 		strftime('%Y-%m-%dT%H:%M:%SZ', created_at),
 		strftime('%Y-%m-%dT%H:%M:%SZ', updated_at)
 	FROM todos`
+	var conditions []string
 	var args []any
 
 	if status != nil {
-		query += ` WHERE status = ?`
+		conditions = append(conditions, "status = ?")
 		args = append(args, string(*status))
+	}
+	if category != nil {
+		conditions = append(conditions, "category = ?")
+		args = append(args, string(*category))
+	}
+
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
 	}
 
 	query += ` ORDER BY id ASC`
@@ -140,12 +197,13 @@ func (r *Repository) ListTodos(status *model.Status) ([]model.Todo, error) {
 	var todos []model.Todo
 	for rows.Next() {
 		var t model.Todo
-		var statusStr string
+		var statusStr, categoryStr string
 		var createdAt, updatedAt string
-		if err := rows.Scan(&t.ID, &t.Title, &t.Description, &statusStr, &t.ProgressPercent, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.Title, &t.Description, &statusStr, &categoryStr, &t.ProgressPercent, &createdAt, &updatedAt); err != nil {
 			return nil, fmt.Errorf("scan todo: %w", err)
 		}
 		t.Status = model.Status(statusStr)
+		t.Category = model.Category(categoryStr)
 		t.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
 		t.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
 		todos = append(todos, t)
@@ -174,6 +232,10 @@ func (r *Repository) UpdateTodo(id int64, req model.UpdateTodoRequest) (model.To
 	if req.Status != nil {
 		setClauses = append(setClauses, "status = ?")
 		args = append(args, string(*req.Status))
+	}
+	if req.Category != nil {
+		setClauses = append(setClauses, "category = ?")
+		args = append(args, string(*req.Category))
 	}
 	if req.ProgressPercent != nil {
 		setClauses = append(setClauses, "progress_percent = ?")
@@ -226,10 +288,10 @@ func (r *Repository) DeleteTodo(id int64) error {
 // scanTodo scans a single row into a Todo.
 func scanTodo(row *sql.Row) (model.Todo, error) {
 	var t model.Todo
-	var statusStr string
+	var statusStr, categoryStr string
 	var createdAt, updatedAt string
 
-	err := row.Scan(&t.ID, &t.Title, &t.Description, &statusStr, &t.ProgressPercent, &createdAt, &updatedAt)
+	err := row.Scan(&t.ID, &t.Title, &t.Description, &statusStr, &categoryStr, &t.ProgressPercent, &createdAt, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Todo{}, ErrNotFound
 	}
@@ -238,6 +300,7 @@ func scanTodo(row *sql.Row) (model.Todo, error) {
 	}
 
 	t.Status = model.Status(statusStr)
+	t.Category = model.Category(categoryStr)
 	t.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
 	t.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
 

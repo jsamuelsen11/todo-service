@@ -18,12 +18,29 @@ var ValidStatuses = map[Status]bool{
 	StatusDone:       true,
 }
 
+// Category represents the category of a TODO item.
+type Category string
+
+const (
+	CategoryPersonal Category = "personal"
+	CategoryWork     Category = "work"
+	CategoryOther    Category = "other"
+)
+
+// ValidCategories contains all valid category values.
+var ValidCategories = map[Category]bool{
+	CategoryPersonal: true,
+	CategoryWork:     true,
+	CategoryOther:    true,
+}
+
 // Todo represents a TODO item with progress tracking.
 type Todo struct {
 	ID              int64     `json:"id" example:"1"`
 	Title           string    `json:"title" example:"Buy groceries"`
 	Description     string    `json:"description" example:"Milk, eggs, bread"`
 	Status          Status    `json:"status" example:"pending" enums:"pending,in_progress,done"`
+	Category        Category  `json:"category" example:"personal" enums:"personal,work,other"`
 	ProgressPercent int       `json:"progress_percent" example:"0" minimum:"0" maximum:"100"`
 	CreatedAt       time.Time `json:"created_at" example:"2026-02-12T15:04:05Z"`
 	UpdatedAt       time.Time `json:"updated_at" example:"2026-02-12T15:04:05Z"`
@@ -33,16 +50,18 @@ type Todo struct {
 type CreateTodoRequest struct {
 	Title           string `json:"title" example:"Buy groceries"`
 	Description     string `json:"description" example:"Milk, eggs, bread"`
-	Status          Status `json:"status,omitempty" example:"pending" enums:"pending,in_progress,done"`
-	ProgressPercent *int   `json:"progress_percent,omitempty" example:"0" minimum:"0" maximum:"100"`
+	Status          Status   `json:"status,omitempty" example:"pending" enums:"pending,in_progress,done"`
+	Category        Category `json:"category,omitempty" example:"personal" enums:"personal,work,other"`
+	ProgressPercent *int     `json:"progress_percent,omitempty" example:"0" minimum:"0" maximum:"100"`
 }
 
 // UpdateTodoRequest is the payload for updating a TODO. All fields are optional.
 type UpdateTodoRequest struct {
 	Title           *string `json:"title,omitempty" example:"Buy groceries"`
 	Description     *string `json:"description,omitempty" example:"Milk, eggs, bread, butter"`
-	Status          *Status `json:"status,omitempty" example:"in_progress" enums:"pending,in_progress,done"`
-	ProgressPercent *int    `json:"progress_percent,omitempty" example:"50" minimum:"0" maximum:"100"`
+	Status          *Status   `json:"status,omitempty" example:"in_progress" enums:"pending,in_progress,done"`
+	Category        *Category `json:"category,omitempty" example:"work" enums:"personal,work,other"`
+	ProgressPercent *int      `json:"progress_percent,omitempty" example:"50" minimum:"0" maximum:"100"`
 }
 
 // TodoListResponse wraps a list of todos.

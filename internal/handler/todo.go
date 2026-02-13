@@ -27,7 +27,8 @@ func NewTodoHandler(repo *db.Repository, logger *slog.Logger) *TodoHandler {
 // --- Input/Output types for huma ---
 
 type ListTodosInput struct {
-	Status string `query:"status" required:"false" enum:"pending,in_progress,done" doc:"Filter by status"`
+	Status   string `query:"status" required:"false" enum:"pending,in_progress,done" doc:"Filter by status"`
+	Category string `query:"category" required:"false" enum:"personal,work,other" doc:"Filter by category"`
 }
 
 type ListTodosOutput struct {
@@ -70,7 +71,7 @@ func (h *TodoHandler) RegisterRoutes(api huma.API) {
 		Method:      http.MethodGet,
 		Path:        "/api/v1/todos",
 		Summary:     "List all TODOs",
-		Description: "Retrieve all TODO items, optionally filtered by status.",
+		Description: "Retrieve all TODO items, optionally filtered by status and/or category.",
 		Tags:        []string{"todos"},
 	}, h.ListTodos)
 
@@ -120,7 +121,13 @@ func (h *TodoHandler) ListTodos(ctx context.Context, input *ListTodosInput) (*Li
 		statusFilter = &s
 	}
 
-	todos, err := h.repo.ListTodos(statusFilter)
+	var categoryFilter *model.Category
+	if input.Category != "" {
+		c := model.Category(input.Category)
+		categoryFilter = &c
+	}
+
+	todos, err := h.repo.ListTodos(statusFilter, categoryFilter)
 	if err != nil {
 		h.logger.Error("failed to list todos", slog.String("error", err.Error()))
 		return nil, huma.Error500InternalServerError("failed to retrieve todos")
@@ -138,6 +145,10 @@ func (h *TodoHandler) CreateTodo(ctx context.Context, input *CreateTodoInput) (*
 
 	if input.Body.Status != "" && !model.ValidStatuses[input.Body.Status] {
 		return nil, huma.Error400BadRequest("status must be one of: pending, in_progress, done")
+	}
+
+	if input.Body.Category != "" && !model.ValidCategories[input.Body.Category] {
+		return nil, huma.Error400BadRequest("category must be one of: personal, work, other")
 	}
 
 	if input.Body.ProgressPercent != nil && (*input.Body.ProgressPercent < 0 || *input.Body.ProgressPercent > 100) {
@@ -169,6 +180,10 @@ func (h *TodoHandler) GetTodo(ctx context.Context, input *GetTodoInput) (*GetTod
 func (h *TodoHandler) UpdateTodo(ctx context.Context, input *UpdateTodoInput) (*UpdateTodoOutput, error) {
 	if input.Body.Status != nil && !model.ValidStatuses[*input.Body.Status] {
 		return nil, huma.Error400BadRequest("status must be one of: pending, in_progress, done")
+	}
+
+	if input.Body.Category != nil && !model.ValidCategories[*input.Body.Category] {
+		return nil, huma.Error400BadRequest("category must be one of: personal, work, other")
 	}
 
 	if input.Body.ProgressPercent != nil && (*input.Body.ProgressPercent < 0 || *input.Body.ProgressPercent > 100) {
