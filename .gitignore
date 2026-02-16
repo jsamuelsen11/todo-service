@@ -9,3 +9,9 @@ logs/*.log.*
 
 # Binary
 todo-service
+
+# Serena
+.serena/
+
+# Claude Config
+.claude/
