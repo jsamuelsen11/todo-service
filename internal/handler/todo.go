@@ -29,6 +29,7 @@ func NewTodoHandler(repo *db.Repository, logger *slog.Logger) *TodoHandler {
 type ListTodosInput struct {
 	Status   string `query:"status" required:"false" enum:"pending,in_progress,done" doc:"Filter by status"`
 	Category string `query:"category" required:"false" enum:"personal,work,other" doc:"Filter by category"`
+	GroupID  int64  `query:"group_id" required:"false" doc:"Filter by group ID"`
 }
 
 type ListTodosOutput struct {
@@ -127,7 +128,12 @@ func (h *TodoHandler) ListTodos(ctx context.Context, input *ListTodosInput) (*Li
 		categoryFilter = &c
 	}
 
-	todos, err := h.repo.ListTodos(statusFilter, categoryFilter)
+	var groupFilter *int64
+	if input.GroupID != 0 {
+		groupFilter = &input.GroupID
+	}
+
+	todos, err := h.repo.ListTodos(statusFilter, categoryFilter, groupFilter)
 	if err != nil {
 		h.logger.Error("failed to list todos", slog.String("error", err.Error()))
 		return nil, huma.Error500InternalServerError("failed to retrieve todos")

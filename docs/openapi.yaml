@@ -1,5 +1,27 @@
 components:
   schemas:
+    CreateGroupRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/CreateGroupRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        description:
+          examples:
+            - First sprint tasks
+          type: string
+        name:
+          examples:
+            - Sprint 1
+          type: string
+      required:
+        - name
+        - description
+      type: object
     CreateTodoRequest:
       additionalProperties: false
       properties:
@@ -18,6 +40,11 @@ components:
           examples:
             - Milk, eggs, bread
           type: string
+        group_id:
+          examples:
+            - 1
+          format: int64
+          type: integer
         progress_percent:
           examples:
             - 0
@@ -96,6 +123,71 @@ components:
           format: uri
           type: string
       type: object
+    Group:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/Group.json
+          format: uri
+          readOnly: true
+          type: string
+        created_at:
+          examples:
+            - "2026-02-12T15:04:05Z"
+          format: date-time
+          type: string
+        description:
+          examples:
+            - First sprint tasks
+          type: string
+        id:
+          examples:
+            - 1
+          format: int64
+          type: integer
+        name:
+          examples:
+            - Sprint 1
+          type: string
+        updated_at:
+          examples:
+            - "2026-02-12T15:04:05Z"
+          format: date-time
+          type: string
+      required:
+        - id
+        - name
+        - description
+        - created_at
+        - updated_at
+      type: object
+    GroupListResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/GroupListResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        count:
+          examples:
+            - 3
+          format: int64
+          type: integer
+        groups:
+          items:
+            $ref: "#/components/schemas/Group"
+          type:
+            - array
+            - "null"
+      required:
+        - groups
+        - count
+      type: object
     Todo:
       additionalProperties: false
       properties:
@@ -119,6 +211,11 @@ components:
           examples:
             - Milk, eggs, bread
           type: string
+        group_id:
+          examples:
+            - 1
+          format: int64
+          type: integer
         id:
           examples:
             - 1
@@ -179,6 +276,25 @@ components:
         - todos
         - count
       type: object
+    UpdateGroupRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/UpdateGroupRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        description:
+          examples:
+            - Updated sprint tasks
+          type: string
+        name:
+          examples:
+            - Sprint 1
+          type: string
+      type: object
     UpdateTodoRequest:
       additionalProperties: false
       properties:
@@ -197,6 +313,11 @@ components:
           examples:
             - Milk, eggs, bread, butter
           type: string
+        group_id:
+          examples:
+            - 1
+          format: int64
+          type: integer
         progress_percent:
           examples:
             - 50
@@ -219,6 +340,201 @@ info:
   version: 1.0.0
 openapi: 3.1.0
 paths:
+  /api/v1/groups:
+    get:
+      description: Retrieve all TODO groups.
+      operationId: list-groups
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroupListResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: List all groups
+      tags:
+        - groups
+    post:
+      description: Create a new group for organizing TODOs.
+      operationId: create-group
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateGroupRequest"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Group"
+          description: Created
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Create a new group
+      tags:
+        - groups
+  /api/v1/groups/{id}:
+    delete:
+      description: Delete a group by its ID. TODOs in this group will be ungrouped.
+      operationId: delete-group
+      parameters:
+        - description: Group ID
+          example: 1
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Group ID
+            examples:
+              - 1
+            format: int64
+            type: integer
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Delete a group
+      tags:
+        - groups
+    get:
+      description: Retrieve a single group by its ID.
+      operationId: get-group
+      parameters:
+        - description: Group ID
+          example: 1
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Group ID
+            examples:
+              - 1
+            format: int64
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Group"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Get a group by ID
+      tags:
+        - groups
+    put:
+      description: Update an existing group. Only provided fields are changed.
+      operationId: update-group
+      parameters:
+        - description: Group ID
+          example: 1
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Group ID
+            examples:
+              - 1
+            format: int64
+            type: integer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateGroupRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Group"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Update a group
+      tags:
+        - groups
+  /api/v1/groups/{id}/todos:
+    get:
+      description: Retrieve all TODO items belonging to a specific group, optionally filtered by status and/or category.
+      operationId: get-group-todos
+      parameters:
+        - description: Group ID
+          example: 1
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Group ID
+            examples:
+              - 1
+            format: int64
+            type: integer
+        - description: Filter by status
+          explode: false
+          in: query
+          name: status
+          schema:
+            description: Filter by status
+            enum:
+              - pending
+              - in_progress
+              - done
+            type: string
+        - description: Filter by category
+          explode: false
+          in: query
+          name: category
+          schema:
+            description: Filter by category
+            enum:
+              - personal
+              - work
+              - other
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TodoListResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Get TODOs in a group
+      tags:
+        - groups
   /api/v1/todos:
     get:
       description: Retrieve all TODO items, optionally filtered by status and/or category.
@@ -246,6 +562,14 @@ paths:
               - work
               - other
             type: string
+        - description: Filter by group ID
+          explode: false
+          in: query
+          name: group_id
+          schema:
+            description: Filter by group ID
+            format: int64
+            type: integer
       responses:
         "200":
           content:

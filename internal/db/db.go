@@ -56,7 +56,7 @@ func (r *Repository) Close() error {
 	return r.db.Close()
 }
 
-// Migrate creates the todos table if it doesn't exist.
+// Migrate creates the tables if they don't exist and runs column migrations.
 func (r *Repository) Migrate() error {
 	schema := `
 	CREATE TABLE IF NOT EXISTS todos (
@@ -69,6 +69,14 @@ func (r *Repository) Migrate() error {
 		updated_at       DATETIME NOT NULL DEFAULT (datetime('now'))
 	);
 	CREATE INDEX IF NOT EXISTS idx_todos_status ON todos(status);
+
+	CREATE TABLE IF NOT EXISTS groups (
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		name        TEXT    NOT NULL,
+		description TEXT    NOT NULL DEFAULT '',
+		created_at  DATETIME NOT NULL DEFAULT (datetime('now')),
+		updated_at  DATETIME NOT NULL DEFAULT (datetime('now'))
+	);
 	`
 	if _, err := r.db.Exec(schema); err != nil {
 		return fmt.Errorf("execute schema: %w", err)
@@ -76,6 +84,10 @@ func (r *Repository) Migrate() error {
 
 	if err := r.addCategoryColumn(); err != nil {
 		return fmt.Errorf("add category column: %w", err)
+	}
+
+	if err := r.addGroupIDColumn(); err != nil {
+		return fmt.Errorf("add group_id column: %w", err)
 	}
 
 	r.logger.Info("database migration complete")
@@ -121,6 +133,42 @@ func (r *Repository) addCategoryColumn() error {
 	return nil
 }
 
+// addGroupIDColumn adds the group_id column to todos if it doesn't already exist.
+func (r *Repository) addGroupIDColumn() error {
+	rows, err := r.db.Query("PRAGMA table_info(todos)")
+	if err != nil {
+		return fmt.Errorf("query table info: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull int
+		var dfltValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+			return fmt.Errorf("scan table info: %w", err)
+		}
+		if name == "group_id" {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate table info: %w", err)
+	}
+
+	if _, err := r.db.Exec(`ALTER TABLE todos ADD COLUMN group_id INTEGER`); err != nil {
+		return fmt.Errorf("execute group_id migration: %w", err)
+	}
+	if _, err := r.db.Exec(`CREATE INDEX IF NOT EXISTS idx_todos_group_id ON todos(group_id)`); err != nil {
+		return fmt.Errorf("create group_id index: %w", err)
+	}
+
+	r.logger.Info("added group_id column to todos table")
+	return nil
+}
+
 // CreateTodo inserts a new TODO and returns it.
 func (r *Repository) CreateTodo(req model.CreateTodoRequest) (model.Todo, error) {
 	status := model.StatusPending
@@ -136,9 +184,14 @@ func (r *Repository) CreateTodo(req model.CreateTodoRequest) (model.Todo, error)
 		progress = *req.ProgressPercent
 	}
 
+	var groupID any
+	if req.GroupID != nil {
+		groupID = *req.GroupID
+	}
+
 	result, err := r.db.Exec(
-		`INSERT INTO todos (title, description, status, category, progress_percent) VALUES (?, ?, ?, ?, ?)`,
-		req.Title, req.Description, string(status), string(category), progress,
+		`INSERT INTO todos (title, description, status, category, progress_percent, group_id) VALUES (?, ?, ?, ?, ?, ?)`,
+		req.Title, req.Description, string(status), string(category), progress, groupID,
 	)
 	if err != nil {
 		return model.Todo{}, fmt.Errorf("insert todo: %w", err)
@@ -155,7 +208,7 @@ func (r *Repository) CreateTodo(req model.CreateTodoRequest) (model.Todo, error)
 // GetTodo retrieves a single TODO by ID.
 func (r *Repository) GetTodo(id int64) (model.Todo, error) {
 	row := r.db.QueryRow(
-		`SELECT id, title, description, status, category, progress_percent,
+		`SELECT id, title, description, status, category, progress_percent, group_id,
 			strftime('%Y-%m-%dT%H:%M:%SZ', created_at),
 			strftime('%Y-%m-%dT%H:%M:%SZ', updated_at)
 		FROM todos WHERE id = ?`,
@@ -164,9 +217,9 @@ func (r *Repository) GetTodo(id int64) (model.Todo, error) {
 	return scanTodo(row)
 }
 
-// ListTodos retrieves all TODOs, optionally filtered by status and/or category.
-func (r *Repository) ListTodos(status *model.Status, category *model.Category) ([]model.Todo, error) {
-	query := `SELECT id, title, description, status, category, progress_percent,
+// ListTodos retrieves all TODOs, optionally filtered by status, category, and/or group.
+func (r *Repository) ListTodos(status *model.Status, category *model.Category, groupID *int64) ([]model.Todo, error) {
+	query := `SELECT id, title, description, status, category, progress_percent, group_id,
 		strftime('%Y-%m-%dT%H:%M:%SZ', created_at),
 		strftime('%Y-%m-%dT%H:%M:%SZ', updated_at)
 	FROM todos`
@@ -180,6 +233,10 @@ func (r *Repository) ListTodos(status *model.Status, category *model.Category) (
 	if category != nil {
 		conditions = append(conditions, "category = ?")
 		args = append(args, string(*category))
+	}
+	if groupID != nil {
+		conditions = append(conditions, "group_id = ?")
+		args = append(args, *groupID)
 	}
 
 	if len(conditions) > 0 {
@@ -199,11 +256,15 @@ func (r *Repository) ListTodos(status *model.Status, category *model.Category) (
 		var t model.Todo
 		var statusStr, categoryStr string
 		var createdAt, updatedAt string
-		if err := rows.Scan(&t.ID, &t.Title, &t.Description, &statusStr, &categoryStr, &t.ProgressPercent, &createdAt, &updatedAt); err != nil {
+		var gID sql.NullInt64
+		if err := rows.Scan(&t.ID, &t.Title, &t.Description, &statusStr, &categoryStr, &t.ProgressPercent, &gID, &createdAt, &updatedAt); err != nil {
 			return nil, fmt.Errorf("scan todo: %w", err)
 		}
 		t.Status = model.Status(statusStr)
 		t.Category = model.Category(categoryStr)
+		if gID.Valid {
+			t.GroupID = &gID.Int64
+		}
 		t.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
 		t.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
 		todos = append(todos, t)
@@ -240,6 +301,14 @@ func (r *Repository) UpdateTodo(id int64, req model.UpdateTodoRequest) (model.To
 	if req.ProgressPercent != nil {
 		setClauses = append(setClauses, "progress_percent = ?")
 		args = append(args, *req.ProgressPercent)
+	}
+	if req.GroupID != nil {
+		setClauses = append(setClauses, "group_id = ?")
+		if *req.GroupID == 0 {
+			args = append(args, nil) // 0 means remove from group
+		} else {
+			args = append(args, *req.GroupID)
+		}
 	}
 
 	if len(setClauses) == 0 {
@@ -290,8 +359,9 @@ func scanTodo(row *sql.Row) (model.Todo, error) {
 	var t model.Todo
 	var statusStr, categoryStr string
 	var createdAt, updatedAt string
+	var groupID sql.NullInt64
 
-	err := row.Scan(&t.ID, &t.Title, &t.Description, &statusStr, &categoryStr, &t.ProgressPercent, &createdAt, &updatedAt)
+	err := row.Scan(&t.ID, &t.Title, &t.Description, &statusStr, &categoryStr, &t.ProgressPercent, &groupID, &createdAt, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Todo{}, ErrNotFound
 	}
@@ -301,8 +371,156 @@ func scanTodo(row *sql.Row) (model.Todo, error) {
 
 	t.Status = model.Status(statusStr)
 	t.Category = model.Category(categoryStr)
+	if groupID.Valid {
+		t.GroupID = &groupID.Int64
+	}
 	t.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
 	t.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
 
 	return t, nil
+}
+
+// --- Group CRUD ---
+
+// CreateGroup inserts a new group and returns it.
+func (r *Repository) CreateGroup(req model.CreateGroupRequest) (model.Group, error) {
+	result, err := r.db.Exec(
+		`INSERT INTO groups (name, description) VALUES (?, ?)`,
+		req.Name, req.Description,
+	)
+	if err != nil {
+		return model.Group{}, fmt.Errorf("insert group: %w", err)
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return model.Group{}, fmt.Errorf("get last insert id: %w", err)
+	}
+
+	return r.GetGroup(id)
+}
+
+// GetGroup retrieves a single group by ID.
+func (r *Repository) GetGroup(id int64) (model.Group, error) {
+	row := r.db.QueryRow(
+		`SELECT id, name, description,
+			strftime('%Y-%m-%dT%H:%M:%SZ', created_at),
+			strftime('%Y-%m-%dT%H:%M:%SZ', updated_at)
+		FROM groups WHERE id = ?`,
+		id,
+	)
+	return scanGroup(row)
+}
+
+// ListGroups retrieves all groups.
+func (r *Repository) ListGroups() ([]model.Group, error) {
+	rows, err := r.db.Query(
+		`SELECT id, name, description,
+			strftime('%Y-%m-%dT%H:%M:%SZ', created_at),
+			strftime('%Y-%m-%dT%H:%M:%SZ', updated_at)
+		FROM groups ORDER BY id ASC`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query groups: %w", err)
+	}
+	defer rows.Close()
+
+	var groups []model.Group
+	for rows.Next() {
+		var g model.Group
+		var createdAt, updatedAt string
+		if err := rows.Scan(&g.ID, &g.Name, &g.Description, &createdAt, &updatedAt); err != nil {
+			return nil, fmt.Errorf("scan group: %w", err)
+		}
+		g.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+		g.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+		groups = append(groups, g)
+	}
+
+	if groups == nil {
+		groups = []model.Group{}
+	}
+
+	return groups, rows.Err()
+}
+
+// UpdateGroup updates only the provided fields of a group.
+func (r *Repository) UpdateGroup(id int64, req model.UpdateGroupRequest) (model.Group, error) {
+	var setClauses []string
+	var args []any
+
+	if req.Name != nil {
+		setClauses = append(setClauses, "name = ?")
+		args = append(args, *req.Name)
+	}
+	if req.Description != nil {
+		setClauses = append(setClauses, "description = ?")
+		args = append(args, *req.Description)
+	}
+
+	if len(setClauses) == 0 {
+		return r.GetGroup(id)
+	}
+
+	setClauses = append(setClauses, "updated_at = datetime('now')")
+	args = append(args, id)
+
+	query := fmt.Sprintf("UPDATE groups SET %s WHERE id = ?", strings.Join(setClauses, ", "))
+
+	result, err := r.db.Exec(query, args...)
+	if err != nil {
+		return model.Group{}, fmt.Errorf("update group: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return model.Group{}, fmt.Errorf("rows affected: %w", err)
+	}
+	if affected == 0 {
+		return model.Group{}, ErrNotFound
+	}
+
+	return r.GetGroup(id)
+}
+
+// DeleteGroup deletes a group by ID. TODOs in this group will have their group_id set to NULL.
+func (r *Repository) DeleteGroup(id int64) error {
+	result, err := r.db.Exec(`DELETE FROM groups WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete group: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if affected == 0 {
+		return ErrNotFound
+	}
+
+	// Ungroup any TODOs that belonged to this group
+	if _, err := r.db.Exec(`UPDATE todos SET group_id = NULL WHERE group_id = ?`, id); err != nil {
+		return fmt.Errorf("ungroup todos: %w", err)
+	}
+
+	return nil
+}
+
+// scanGroup scans a single row into a Group.
+func scanGroup(row *sql.Row) (model.Group, error) {
+	var g model.Group
+	var createdAt, updatedAt string
+
+	err := row.Scan(&g.ID, &g.Name, &g.Description, &createdAt, &updatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.Group{}, ErrNotFound
+	}
+	if err != nil {
+		return model.Group{}, fmt.Errorf("scan group: %w", err)
+	}
+
+	g.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+	g.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+
+	return g, nil
 }

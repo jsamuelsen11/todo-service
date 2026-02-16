@@ -59,6 +59,9 @@ func main() {
 	todoHandler := handler.NewTodoHandler(repo, log)
 	todoHandler.RegisterRoutes(api)
 
+	groupHandler := handler.NewGroupHandler(repo, log)
+	groupHandler.RegisterRoutes(api)
+
 	// Server with graceful shutdown
 	addr := ":8080"
 	srv := &http.Server{Addr: addr, Handler: router}
